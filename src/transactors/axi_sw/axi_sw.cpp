@@ -37,6 +37,11 @@ void axi_sw_r_reset();
 void axi_sw_b_reset();
 
 std::uint8_t axi_sw_reset_ptrs(cvm::topology::loc_t loc) {
+  // Save this instance's scope so r_dpi/b_dpi can set it before calling the exports.
+  {
+    std::lock_guard<std::mutex> l(_axi_sw::scopes_mutex);
+    _axi_sw::scopes[loc] = svGetScope();
+  }
   // Zero the SV FIFO write pointers from the C/DPI domain. wptr_nxt must NOT be
   // reset from RTL (e.g. inside the AXI_SW_DPI_FIFO macro) -- on ZeBu that makes
   // wptr_nxt a dual-driver (RTL + DPI) and the DPI push increment is silently
