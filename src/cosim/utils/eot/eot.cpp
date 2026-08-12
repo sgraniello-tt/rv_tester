@@ -13,8 +13,6 @@
 #include "src/sysmod/sysmod_rpc.h"
 #include "rv_tester_structs.h"
 
-extern "C" void rv_tester_set_eot_addr(std::uint64_t addr);
-
 constexpr std::uint64_t recent_pc_default = std::numeric_limits<std::uint64_t>::max();
 
 DEFINE_string(eot, "tohost", "Enable end-of-test mechanism. Supported options: tohost, max_instr, tohost_all");
@@ -57,7 +55,6 @@ void eot::configure() {
 
 void eot::init_tohost_addr() {
   resolve_tohost_addr();
-  cvm::registry::callbacks.push(loc_, [&]() { rv_tester_set_eot_addr(tohost_addr_); });
 }
 
 void eot::resolve_tohost_addr() {
@@ -365,5 +362,13 @@ int is_eot_tohost() {
   if (FLAGS_eot == "tohost_all")
     return 1;
   return 0;
+}
+
+// SV pulls the resolved tohost address through this import (right after
+// rv_tester_build_registry has run configure/resolve), instead of C++ pushing
+// it to SV through the callback queue with unbounded latency. resolve_tohost_addr
+// writes the result back into FLAGS_tohost on every path.
+unsigned long long rv_tester_get_eot_addr() {
+  return FLAGS_tohost;
 }
 }
