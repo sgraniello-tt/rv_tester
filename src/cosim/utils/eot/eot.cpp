@@ -62,8 +62,7 @@ void eot::resolve_tohost_addr() {
   // Get tohost address from
   // 1. plusarg if provided
   if (FLAGS_tohost != 0x0) {
-    tohost_addr_ = FLAGS_tohost;
-    cvm::log(cvm::NONE, "[eot] tohost from plusarg:: addr=[{:#x}]\n", tohost_addr_);
+    cvm::log(cvm::NONE, "[eot] tohost from plusarg:: addr=[{:#x}]\n", FLAGS_tohost);
     return;
   }
 
@@ -76,15 +75,14 @@ void eot::resolve_tohost_addr() {
     tohost_in_elf = true;
 
     try {
-      tohost_addr_ = std::stoul(addr_str, nullptr, 16);
-      FLAGS_tohost = tohost_addr_;
+      FLAGS_tohost = std::stoul(addr_str, nullptr, 16);
     } catch (...) {
       tohost_in_elf = false;
       if (FLAGS_eot == "tohost" || FLAGS_eot == "tohost_all") {
         cvm::log(cvm::NONE, "Warn: No tohost symbol in elf\n");
       }
     }
-    cvm::log(cvm::NONE, "[eot] tohost from elf:: cmd=[{}] addr_str=[{}] addr=[{:#x}]\n", cmd, addr_str, tohost_addr_);
+    cvm::log(cvm::NONE, "[eot] tohost from elf:: cmd=[{}] addr_str=[{}] addr=[{:#x}]\n", cmd, addr_str, FLAGS_tohost);
   }
   if (tohost_in_elf)
     return;
@@ -95,16 +93,15 @@ void eot::resolve_tohost_addr() {
     cvm::log(cvm::ERROR, "Error: Unable to get memmap\n");
 
   if (m.count("htif") > 0) {
-    tohost_addr_ = m.at("htif").base;
-    FLAGS_tohost = tohost_addr_;
-    cvm::log(cvm::NONE, "[eot] tohost from memmap:: addr=[{:#x}]\n", tohost_addr_);
+    FLAGS_tohost = m.at("htif").base;
+    cvm::log(cvm::NONE, "[eot] tohost from memmap:: addr=[{:#x}]\n", FLAGS_tohost);
   } else {
-    cvm::log(cvm::ERROR, "Error: [eot] tohost from memmap:: htif not found in memmap\n", tohost_addr_);
+    cvm::log(cvm::ERROR, "Error: [eot] tohost from memmap:: htif not found in memmap\n");
   }
 }
 
 std::uint64_t eot::get_tohost_addr() {
-  return tohost_addr_;
+  return FLAGS_tohost;
 }
 
 void eot::process(const rv_tester_transactions::cosim::m_steps<>& m_steps) {
@@ -362,13 +359,5 @@ int is_eot_tohost() {
   if (FLAGS_eot == "tohost_all")
     return 1;
   return 0;
-}
-
-// SV pulls the resolved tohost address through this import (right after
-// rv_tester_build_registry has run configure/resolve), instead of C++ pushing
-// it to SV through the callback queue with unbounded latency. resolve_tohost_addr
-// writes the result back into FLAGS_tohost on every path.
-unsigned long long rv_tester_get_eot_addr() {
-  return FLAGS_tohost;
 }
 }

@@ -16,7 +16,6 @@
 #include <queue>
 #include <ranges>
 #include <iterator>
-#include <unordered_map>
 #include "src/transactors/axi_sw/axi.h"
 #include "svdpi.h"
 
@@ -62,17 +61,6 @@ inline std::string string_to_lower(const std::string& s) {
 }
 
 inline bool axi_sw_destroyed = false;
-
-// Each instance saves its scope here (in axi_sw_reset_ptrs) so we can set it right before
-// calling the DPI exports, since other threads can change the global scope at any time.
-inline std::mutex scopes_mutex;
-inline std::unordered_map<cvm::topology::loc_t, svScope> scopes;
-inline void set_export_scope(cvm::topology::loc_t loc) {
-  std::lock_guard<std::mutex> l(scopes_mutex);
-  auto it = scopes.find(loc);
-  if (it != scopes.end())
-    svSetScope(it->second);
-}
 
 extern "C" {
 void axi_sw_b(axi::id_t id, axi::resp_t resp, uint16_t latency);
@@ -331,9 +319,13 @@ private:
       }
 
       if (!FLAGS_axi_sw_read_no_callbacks) {
-        // Call the DPI export directly instead of deferring to the callback queue, which runs it late and under the wrong scope (reverts abdb186).
-        std::lock_guard<std::mutex> l(r_dpi_mutex_);
-        r_dpi();
+        // Run immediately with the right scope instead of queuing it.
+        cvm::registry::callbacks.call(
+            loc_,
+            [this]() {
+              std::lock_guard<std::mutex> l(r_dpi_mutex_);
+              r_dpi();
+            });
       }
     }
   }
@@ -413,7 +405,6 @@ private:
 
     uint16_t latency = cvm::rand::lcg::generate<uint64_t>(add_latency_max_ - add_latency_min_) + add_latency_min_;
 
-    _axi_sw::set_export_scope(loc_);
     switch (data_width_) {
     case 64:
       _axi_sw::axi_sw_r_8(r.id, r.resp, r.data.data(), r.last, latency);
@@ -452,7 +443,6 @@ private:
     cvm::log(cvm::FULL, "[axi_sw] axi_sw_b: id={}\n", b.id);
 
     uint8_t latency = cvm::rand::lcg::generate<uint64_t>(add_latency_max_ - add_latency_min_) + add_latency_min_;
-    _axi_sw::set_export_scope(loc_);
     _axi_sw::axi_sw_b(b.id, b.resp, latency);
     return true;
   }

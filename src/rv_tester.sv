@@ -118,7 +118,6 @@ module rv_tester
   import "DPI-C" context function void rv_tester_parse_memmap(int unsigned no_addr_rules, int num_ways, int num_sets, int num_blocks, int addr_width, int data_width);
   import "DPI-C" context function void rv_tester_build_registry();
   import "DPI-C" context function void rv_tester_domain0_build_registry();
-  import "DPI-C" function longint unsigned rv_tester_get_eot_addr();
   import "DPI-C" function byte unsigned rv_tester_shutdown_registry(bit unconditional_terminate);
   import "DPI-C" function byte unsigned rv_tester_domain1_shutdown_registry();
   import "DPI-C" context function bit rv_tester_flush_callbacks();
@@ -458,9 +457,8 @@ module rv_tester
         /* verilator lint_on BLKSEQ */
   
   
-        // Pull the tohost address from C++ (resolved during rv_tester_build_registry
-        // above) instead of C++ pushing it here through the callback queue.
-        eot_addr                        <= rv_tester_get_eot_addr();
+        // Resolved by eot during rv_tester_build_registry above.
+        eot_addr                        <= cvm_plusargs::get_ulongint("tohost");
         eot_status                      <= 1;
         eot_syscall                     <= 0;
         perf                            <= cvm_plusargs::get_bool("perf") != '0;
