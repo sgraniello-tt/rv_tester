@@ -1226,7 +1226,8 @@ void bridge::pre_step_interrupt_process(hart_id_t hart, const rv_instr_t& d) {
   if (d.intr) {
     uint64_t dut_intr_bit = d.icause + (d.virt_mode ? 1 : 0);
     intr_during_ucode_.reset(dut_intr_bit);
-    std::bitset<64> keep_deferred = intr_during_ucode_ | mip_changed_since_last_step_;
+    // External causes whose MSI is still in flight are invisible to the DUT: keep them deferred
+    std::bitset<64> keep_deferred = intr_during_ucode_ | mip_changed_since_last_step_ | inflight_ext_mask(d.cycle);
     keep_deferred.reset(dut_intr_bit);
     mip_changed_since_last_step_.reset();
     if (w_intr && (w_cause != dut_intr_bit) && keep_deferred.test(w_cause))
@@ -1249,7 +1250,7 @@ void bridge::pre_step_interrupt_process(hart_id_t hart, const rv_instr_t& d) {
   if (cosim_util::is_xret_opcode(w_.opcode)) {
     // If xRET is seen, then undefer all interrupts except for those that asserted during xRET or
     // After xRET and before next instruction retires.
-    defer_interrupt(hart, d.cycle, 0 | ((tmp_mip_latest_ ^ last_step_mip_) | mip_changed_since_last_step_).to_ullong());
+    defer_interrupt(hart, d.cycle, 0 | ((tmp_mip_latest_ ^ last_step_mip_) | mip_changed_since_last_step_ | inflight_ext_mask(d.cycle)).to_ullong());
     intr_undeferred_due_to_xret_intr_csr_ = true;
   }
   // TODO: Add interrupt CSRs check for undeferring interrupts
@@ -1351,8 +1352,14 @@ void bridge::post_step_interrupt_check(hart_id_t hart, const rv_instr_t& d, cons
   intr_during_ucode_.reset();
   if (intr_partially_deferred_) {
     intr_partially_deferred_ = false;
-    deferred_intr_age_.clear();
-    defer_interrupt(hart, d.cycle, 0);
+    std::bitset<64> keep = inflight_ext_mask(d.cycle);
+    for (auto it = deferred_intr_age_.begin(); it != deferred_intr_age_.end();) {
+      if (!keep.test(it->first))
+        it = deferred_intr_age_.erase(it);
+      else
+        ++it;
+    }
+    defer_interrupt(hart, d.cycle, keep.to_ullong());
   }
 
   if (poke_time_csr_post_step_) {
@@ -3102,6 +3109,13 @@ void bridge::retire_inflight_msi(const mem_t& m) {
     }
   }
   bridge_log(cvm::MEDIUM, "<{}> MSI landed with no Whisper store in flight [addr={:#x} data={:#x}]\n", m.cycle, m.pa, m.data);
+}
+
+// External interrupt bits to keep deferred while an MSI to this hart is in flight (0 otherwise)
+std::bitset<64> bridge::inflight_ext_mask(uint64_t cycle) {
+  if (!msi_inflight_to_me(cycle))
+    return 0;
+  return (uint64_t{1} << MEI) | (uint64_t{1} << SEI) | (uint64_t{1} << VSEI) | (uint64_t{1} << SGEI);
 }
 
 // True while an MSI issued by the DUT to this hart has not yet reached its IMSIC; errors if one is overdue

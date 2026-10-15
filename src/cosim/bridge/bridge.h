@@ -200,6 +200,7 @@ private:
   void track_inflight_msi(uint64_t cycle, uint64_t pa, uint64_t data);
   void retire_inflight_msi(const mem_t& m);
   bool msi_inflight_to_me(uint64_t cycle);
+  std::bitset<64> inflight_ext_mask(uint64_t cycle);
   void poke_non_standard_interrupt(hart_id_t hart, uint64_t cycle, std::bitset<64> non_std_mip_bits, bool intr_during_ucode);
   bool check_and_defer_interrupt(hart_id_t hart, uint64_t time, std::bitset<64> mip, bool intr_during_ucode = false);
   void check_interrupt(hart_id_t hart, uint64_t cycle, bool& taken, uint64_t& cause, bool& virt_mode);
