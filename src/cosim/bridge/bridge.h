@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <vector>
 #include <map>
+#include <deque>
 #include <regex>
 
 #include "cvm/topology.hpp"
@@ -197,6 +198,10 @@ private:
   std::string to_string(rv_intr_t& i);
   void process_imsic_msi(hart_id_t hart, const mem_t& m);
   void defer_unregistered_external_interrupt(hart_id_t hart, uint64_t cycle, uint64_t w_cause);
+  bool imsic_target_hart(uint64_t pa, unsigned& target) const;
+  void track_inflight_msi(uint64_t cycle, uint64_t pa, uint64_t data);
+  void retire_inflight_msi(const mem_t& m);
+  bool msi_inflight_to_me(uint64_t cycle);
   void poke_non_standard_interrupt(hart_id_t hart, uint64_t cycle, std::bitset<64> non_std_mip_bits, bool intr_during_ucode);
   bool check_and_defer_interrupt(hart_id_t hart, uint64_t time, std::bitset<64> mip, bool intr_during_ucode = false);
   void check_interrupt(hart_id_t hart, uint64_t cycle, bool& taken, uint64_t& cause, bool& virt_mode);
@@ -475,6 +480,16 @@ private:
   std::pair<uint64_t /*pa*/, uint64_t /*age*/> latest_imsic_{0, 0};
   // Count of external interrupts deferred by defer_unregistered_external_interrupt()
   uint64_t num_unregistered_ext_intr_deferred_ = 0;
+  // IMSIC stores stepped in Whisper whose MSI has not yet reached the target hart's DUT IMSIC
+  struct inflight_msi_t {
+    uint64_t cycle;
+    uint64_t pa;
+    uint64_t data;
+    unsigned src_hart;
+  };
+  // Shared across the per-hart bridge objects, keyed by target hart
+  static std::map<unsigned, std::deque<inflight_msi_t>> inflight_msi_;
+  uint64_t num_msi_inflight_age_holds_ = 0;
 
   std::string mismatch_res_ = "", mismatch_dut_, mismatch_iss_;
   bool custom_vlzero_excp_ = false;
