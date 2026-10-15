@@ -82,6 +82,9 @@ DEFINE_bool(standalone, true, "Enable whisper standalone run at beginning of sim
 DEFINE_bool(csr_metrics, true, "Print the per-hart iss/dut CSR pass-metrics even when the run had no cosim mismatch; set 0 to print them only on a mismatch");
 DEFINE_uint32(max_nmi_resynch_age, 4, "Max age for a pending NMI to be deferred from poking to whisper esp. for newly asserted NMI which DUT is yet to acknowledge");
 DEFINE_uint32(max_pend_intr_age, 256, "Number of instructions allowed to retire before a pending interrupt should be taken");
+DEFINE_uint64(max_inflight_msi_cycles, 262144, "Cycles an IMSIC store stepped in Whisper may take to reach the target hart's DUT IMSIC before erroring");
+
+std::map<unsigned, std::deque<bridge::inflight_msi_t>> bridge::inflight_msi_;
 DEFINE_bool(preload, false, "Whisper preload");
 
 DEFINE_int32(mcmi_poke_enables, 0, "MCM interface poke enables");
@@ -1205,8 +1208,16 @@ void bridge::pre_step_interrupt_process(hart_id_t hart, const rv_instr_t& d) {
     defer_unregistered_external_interrupt(hart, d.cycle, w_cause);
 
   // If Whisper takes interrupt, then increase age of the interrupt
-  if (w_intr)
-    deferred_intr_age_[w_cause]++;
+  // Hold the age while an MSI the DUT has issued to this hart is still in flight to its IMSIC
+  if (w_intr) {
+    bool external = (w_cause == MEI || w_cause == SEI || w_cause == VSEI || w_cause == SGEI);
+    if (external && msi_inflight_to_me(d.cycle)) {
+      deferred_intr_age_.try_emplace(w_cause, 0);
+      num_msi_inflight_age_holds_++;
+    } else {
+      deferred_intr_age_[w_cause]++;
+    }
+  }
 
   // If DUT takes interrupt, then undefer all interrupts
   // Exception: If Interrupts asserted during ucode sequence then do not undefer those interrupts as they are not yet visible to RTL.
@@ -1616,6 +1627,8 @@ void bridge::update_whisper_state(hart_id_t hart, whisper_state_t& w, bool dut_i
       w_.mem_write.data = w.value;
       if ((w.address < device_address_map_sp_base_addr() + device_address_map_sp_size()) && (w.address >= device_address_map_sp_base_addr()))
         num_sp_accesses_++;
+      if (!w.is_cancelled && !w_.trap)
+        track_inflight_msi(w.time, w.address, w.value);
     }
   }
 
@@ -3049,7 +3062,60 @@ void bridge::poke_non_standard_interrupt(hart_id_t hart, uint64_t cycle, std::bi
 
 void bridge::process_dut_imsic_msi(hart_id_t hart, mem_t& m) {
   msi_.push_back(m);
+  retire_inflight_msi(m);
   process_imsic_msi(hart, m);
+}
+
+// Map an IMSIC interrupt-file PA to the hart index it belongs to (M or S file, cluster 0)
+bool bridge::imsic_target_hart(uint64_t pa, unsigned& target) const {
+  const uint32_t cluster_id = 0;
+  const uint64_t stride = uint64_t{1} << device_address_map_imsic_core_id_start_bit();
+  for (uint64_t base : {generate_imsic_m_addr(cluster_id, 0), generate_imsic_s_addr(cluster_id, 0)}) {
+    if (pa >= base && pa < base + stride * num_harts_) {
+      target = static_cast<unsigned>((pa - base) / stride);
+      return true;
+    }
+  }
+  return false;
+}
+
+// Called on the storing hart's bridge for every Whisper memory write
+void bridge::track_inflight_msi(uint64_t cycle, uint64_t pa, uint64_t data) {
+  unsigned target;
+  if (!imsic_target_hart(pa, target))
+    return;
+  inflight_msi_[target].push_back({cycle, pa, data, id_});
+  bridge_log(cvm::MEDIUM, "<{}> MSI in flight: hart {} -> hart {} [addr={:#x} data={:#x}] queue={}\n", cycle, id_, target, pa, data, inflight_msi_[target].size());
+}
+
+// Called on the target hart's bridge when the DUT IMSIC tap reports the MSI
+void bridge::retire_inflight_msi(const mem_t& m) {
+  auto it = inflight_msi_.find(id_);
+  if (it == inflight_msi_.end())
+    return;
+  auto& q = it->second;
+  for (auto e = q.begin(); e != q.end(); ++e) {
+    if (e->pa == m.pa) {
+      bridge_log(cvm::MEDIUM, "<{}> MSI landed: hart {} -> hart {} [addr={:#x}] latency={} cycles queue={}\n", m.cycle, e->src_hart, id_, m.pa, m.cycle - e->cycle, q.size() - 1);
+      q.erase(e);
+      return;
+    }
+  }
+  bridge_log(cvm::MEDIUM, "<{}> MSI landed with no Whisper store in flight [addr={:#x} data={:#x}]\n", m.cycle, m.pa, m.data);
+}
+
+// True while an MSI issued by the DUT to this hart has not yet reached its IMSIC; errors if one is overdue
+bool bridge::msi_inflight_to_me(uint64_t cycle) {
+  auto it = inflight_msi_.find(id_);
+  if (it == inflight_msi_.end() || it->second.empty())
+    return false;
+  const auto& oldest = it->second.front();
+  if (cycle > oldest.cycle + FLAGS_max_inflight_msi_cycles) {
+    error("Hart {}: MSI from hart {} [addr={:#x} data={:#x}] stepped in Whisper at cycle {} not seen at DUT IMSIC after {} cycles\n",
+          id_, oldest.src_hart, oldest.pa, oldest.data, oldest.cycle, FLAGS_max_inflight_msi_cycles);
+    return false;
+  }
+  return true;
 }
 
 void bridge::process_imsic_msi(hart_id_t hart, const mem_t& m) {
@@ -3790,6 +3856,7 @@ void bridge::report_metrics() {
   print(cvm::NONE, "INFO_PASS_METRIC:{{\"hart{}_latest_imsic_pa\": \"0x{:x}\"}}\n", id_, latest_imsic_.first);
   print(cvm::NONE, "INFO_PASS_METRIC:{{\"hart{}_latest_imsic_age\": \"{}\"}}\n", id_, latest_imsic_.first == 0 ? 0 : latest_imsic_.second);
   print(cvm::NONE, "INFO_PASS_METRIC:{{\"hart{}_unregistered_ext_intr_deferred\": \"{}\"}}\n", id_, num_unregistered_ext_intr_deferred_);
+  print(cvm::NONE, "INFO_PASS_METRIC:{{\"hart{}_msi_inflight_age_holds\": \"{}\"}}\n", id_, num_msi_inflight_age_holds_);
 
   // DUT csr values
   if (dump_csr_metrics) {
