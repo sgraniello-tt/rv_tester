@@ -23,6 +23,9 @@
 
 DEFINE_bool(rvfi, true, "Enable rvfi");
 DEFINE_bool(rvfi_log, true, "Enable rvfi logging");
+DEFINE_uint64(rvfi_drain_timeout_s, 120,
+              "RVDE-31810: max wall-clock seconds to hold the registry shutdown waiting for in-flight "
+              "m_rvfi packets after the TB sends m_eot. 0 disables the drain wait (legacy behaviour).");
 DEFINE_bool(rvfi_log_36b_uop, true, "rvfi log - print 36b uop instead of default 32b riscv opcode");
 DEFINE_string(rvfi_custom_uop_opcodes, "",
               "comma-separated <hex_opcode>:<label> list of known custom micro-op words; "
@@ -83,6 +86,7 @@ void rvfi::configure() {
   connect<
       rv_tester_transactions::cosim::m_reset<>,
       rv_tester_transactions::cosim::m_disable_checks<>,
+      rv_tester_transactions::cosim::m_eot<>,
       rv_tester_transactions::cosim::m_rvfi<>,
       rv_tester_transactions::cosim::m_steps<>,
       rv_tester_transactions::cosim::m_gp_regs<>,
@@ -113,11 +117,66 @@ rvfi::~rvfi() {
   uint32_t ncores = cvm::topology::attr(cvm::topology::get_from_type("PLATFORM", 0), "NHARTS").second;
   if (FLAGS_rvfi && ncores == 1 && (count_ == 1) && (FLAGS_offline_dpi == false))
     cvm::log(cvm::ERROR, "Error: rvfi termination without processing any instructions\n");
+  if (FLAGS_rvfi_log)
+    log.flush();
 }
 
 void rvfi::check() {
   // bridge_->report_metrics();
 }
+
+// RVDE-31810 -----------------------------------------------------------------
+// On ZeBu the cosim stream (domain 1, streaming DPI) lags emulation. The TB used to
+// call rv_tester_shutdown_registry as soon as terminate_now asserted, which destroyed
+// this component while m_rvfi packets were still in flight; the tail of the rvfi log
+// (and of the cosim comparison) was silently lost. The TB now sends one m_eot carrying
+// the cycle of the last m_rvfi it sent, and shutdown_ready() holds the registry
+// shutdown until that cycle has been processed (bounded by +rvfi_drain_timeout_s).
+
+void rvfi::process(const rv_tester_transactions::cosim::m_eot<>& m_eot) {
+  if (loc_ != m_eot.location)
+    return;
+  if (eot_seen_)
+    return;
+  eot_seen_ = true;
+  eot_last_rvfi_cycle_ = m_eot.last_rvfi_cycle;
+  cvm::log(cvm::MEDIUM, "[RVFI] m_eot: cycle={} last_rvfi_cycle={} processed_up_to={} packets={}\n",
+           m_eot.cycle, m_eot.last_rvfi_cycle, last_rvfi_cycle_, rvfi_packets_);
+  finish_if_drained();
+}
+
+void rvfi::finish_if_drained() {
+  if (terminate_requested_ && !terminated_ && drained()) {
+    cvm::log(cvm::HIGH, "[RVFI] stream drained at cycle {} ({} packets), stopping further rvfi processing\n",
+             last_rvfi_cycle_, rvfi_packets_);
+    terminated_ = true;
+  }
+}
+
+bool rvfi::shutdown_ready() {
+  if (FLAGS_rvfi_drain_timeout_s == 0 || in_reset_ || !FLAGS_rvfi)
+    return true;
+  if (drained())
+    return true;
+
+  auto now = std::chrono::steady_clock::now();
+  if (drain_start_ == std::chrono::steady_clock::time_point{}) {
+    drain_start_ = now;
+    cvm::log(cvm::MEDIUM, "[RVFI] shutdown requested, waiting for m_rvfi stream to drain (eot_seen={} processed_up_to={} target={})\n",
+             eot_seen_, last_rvfi_cycle_, eot_last_rvfi_cycle_);
+    return false;
+  }
+  auto waited = std::chrono::duration_cast<std::chrono::seconds>(now - drain_start_).count();
+  if (static_cast<uint64_t>(waited) >= FLAGS_rvfi_drain_timeout_s) {
+    cvm::log(cvm::NONE,
+             "Warning: [RVFI] gave up waiting for m_rvfi stream to drain after {}s (eot_seen={} processed_up_to={} target={} packets={}); "
+             "rvfi log / cosim coverage may be truncated\n",
+             waited, eot_seen_, last_rvfi_cycle_, eot_last_rvfi_cycle_, rvfi_packets_);
+    return true;
+  }
+  return false;
+}
+// -----------------------------------------------------------------------------
 
 bool rvfi::patch_access(uint64_t addr) {
   if (!patch_mode_)
@@ -148,6 +207,13 @@ void rvfi::process(const rv_tester_transactions::cosim::m_reset<>& m_reset) {
   in_reset_ = false;
   cvm::log(cvm::MEDIUM, "[rvfi] reset\n");
 
+  // RVDE-31810: new run segment, restart drain tracking
+  terminate_requested_ = false;
+  eot_seen_ = false;
+  eot_last_rvfi_cycle_ = 0;
+  last_rvfi_cycle_ = 0;
+  drain_start_ = {};
+
   if (FLAGS_cosim) {
     bridge_->reset();
     // mcmi_->reset();
@@ -162,6 +228,18 @@ void rvfi::process(const rv_tester_transactions::cosim::m_rvfi<>& m_rvfi) {
 
   if (loc_ != m_rvfi.location)
     return;
+
+  // RVDE-31810: track drain progress (packets on one channel arrive in order).
+  // Once termination was requested and the TB told us the last cycle it sent,
+  // keep processing up to and including that cycle, then stop (legacy behaviour
+  // stopped at terminate_called, which raced the in-flight packets).
+  if (terminate_requested_ && eot_seen_ && m_rvfi.cycle > eot_last_rvfi_cycle_) {
+    last_rvfi_cycle_ = std::max(last_rvfi_cycle_, eot_last_rvfi_cycle_);  // everything before it has arrived
+    finish_if_drained();
+    return;
+  }
+  last_rvfi_cycle_ = m_rvfi.cycle;
+  rvfi_packets_++;
 
   // patch_mode_first_tag_ is captured from the patch trap (the trigger's tag),
   // not from the first ucode record here. See rvfi::process(m_trap) for ecause 60.
@@ -1108,8 +1186,18 @@ void rvfi::process(const rv_tester::terminate_called_mem_checks&) {
 }
 
 void rvfi::process(const rv_tester::terminate_called&) {
-  cvm::log(cvm::HIGH, "[RVFI] termination signaled, stopping further rvfi processing\n");
-  terminated_ = true;
+  // RVDE-31810: do not stop here; in-flight m_rvfi packets may still be arriving.
+  // Processing stops once the stream has drained to the cycle given by m_eot
+  // (or immediately if the drain wait is disabled).
+  terminate_requested_ = true;
+  if (FLAGS_rvfi_drain_timeout_s == 0) {
+    cvm::log(cvm::HIGH, "[RVFI] termination signaled, stopping further rvfi processing\n");
+    terminated_ = true;
+    return;
+  }
+  cvm::log(cvm::HIGH, "[RVFI] termination signaled, draining m_rvfi stream (eot_seen={} processed_up_to={} target={})\n",
+           eot_seen_, last_rvfi_cycle_, eot_last_rvfi_cycle_);
+  finish_if_drained();
 }
 
 void rvfi::process(const bridge::error_loc&) {

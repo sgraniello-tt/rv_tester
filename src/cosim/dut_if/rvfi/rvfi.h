@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <fstream>
 #include <fmt/format.h>
 #include <unordered_map>
@@ -40,9 +41,13 @@ public:
   ~rvfi();
   void configure();
   void check();
+  // RVDE-31810: hold the registry shutdown until the m_rvfi stream has drained
+  // (see m_eot in rv_tester_transactions.yml). Polled by cvm::registry::shutdown().
+  bool shutdown_ready();
 
 private:
   void process(const rv_tester_transactions::cosim::m_reset<>& m_reset);
+  void process(const rv_tester_transactions::cosim::m_eot<>& m_eot);
   void process(const rv_tester_transactions::cosim::m_disable_checks<>& m_disable_checks);
   void process(const rv_tester_transactions::cosim::m_rvfi<>& m_rvfi);
   void process(const rv_tester_transactions::cosim::m_steps<>& m_steps);
@@ -155,4 +160,14 @@ private:
   bool terminated_ = false;
   bool in_debug_mode_ = false;
   bool whisper_reloaded = false;
+
+  // RVDE-31810 end-of-stream drain state
+  bool terminate_requested_ = false;   // terminate_called seen; stop processing once drained
+  bool eot_seen_ = false;              // m_eot marker received
+  uint64_t eot_last_rvfi_cycle_ = 0;   // cycle of the last m_rvfi the TB sent (from m_eot)
+  uint64_t last_rvfi_cycle_ = 0;       // cycle of the last m_rvfi we processed
+  uint64_t rvfi_packets_ = 0;          // m_rvfi packets processed (diagnostics)
+  std::chrono::steady_clock::time_point drain_start_{};
+  bool drained() const { return eot_seen_ && last_rvfi_cycle_ >= eot_last_rvfi_cycle_; }
+  void finish_if_drained();
 };
