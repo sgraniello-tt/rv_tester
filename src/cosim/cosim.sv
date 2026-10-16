@@ -147,6 +147,7 @@ module cosim
       output int cycles_since_retire,
       output rv_tester_pkg::terminate_t terminate,
       input logic disable_checks,
+      input logic tb_terminate,        // RVDE-31810: TB has started terminating; send m_eot marker once
       output logic boot_done,
       input  logic             devict_cl_valid,
       input  logic [51:0]      devict_cl_addr,
@@ -866,6 +867,31 @@ end
   assign m_disable_checkss[0].valid            = RVFI_EN & rvfi_enabled & disable_checks;
   assign m_disable_checkss[0].data.location    = location;
   assign m_disable_checkss[0].data.cycle       = clocks;
+
+  // RVDE-31810: end-of-stream marker. Track the cycle of the last m_rvfi packet
+  // actually sent and, once the TB starts terminating, send a single m_eot carrying
+  // it. The C-side rvfi component uses it to hold the registry shutdown until the
+  // in-flight m_rvfi packets have been delivered (ZeBu streaming DPI lags emulation).
+  bit        m_rvfi_sent_any;
+  bit [63:0] last_rvfi_sent_cycle;
+  bit        m_eot_sent;
+  always_comb begin
+    m_rvfi_sent_any = 1'b0;
+    for (int n = 0; n < NRET; n++) m_rvfi_sent_any |= m_rvfis[n].valid;
+  end
+  always @(posedge clk) begin
+    if (reset) begin
+      last_rvfi_sent_cycle <= '0;
+      m_eot_sent           <= 1'b0;
+    end else begin
+      if (m_rvfi_sent_any) last_rvfi_sent_cycle <= clocks;
+      if (m_eots[0].valid) m_eot_sent <= 1'b1;
+    end
+  end
+  assign m_eots[0].valid                = RVFI_EN & rvfi_enabled & tb_terminate & ~m_eot_sent;
+  assign m_eots[0].data.location        = location;
+  assign m_eots[0].data.cycle           = clocks;
+  assign m_eots[0].data.last_rvfi_cycle = m_rvfi_sent_any ? clocks : last_rvfi_sent_cycle;
 
   // m_interrupt_pend
 

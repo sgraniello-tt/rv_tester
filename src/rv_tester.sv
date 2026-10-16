@@ -864,6 +864,7 @@ end
                      .poke_event_in(poke_event_in),
                      .cycles_since_retire(cycles_since_retire[c]),
                      .disable_checks(disable_checks),
+                     .tb_terminate(terminate_now),
                      .boot_done(boot_done[c]),
  `ifdef CACHE_MODEL_EN
                      .devict_cl_valid(devict_cl_valid[c]),
