@@ -15,6 +15,7 @@
 #include "src/transactors/axi_sw/axi.h"
 #include "device_address_map/device_address_map.h"
 
+#include <algorithm>
 #include <iostream>
 #include <chrono>
 #include <cmath>
