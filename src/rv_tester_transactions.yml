@@ -25,6 +25,19 @@ cosim:
             cycle:
                 width: 64
 
+    # RVDE-31810: end-of-stream marker sent once when the TB starts terminating.
+    # last_rvfi_cycle is the cycle of the last m_rvfi packet the TB sent; the C-side
+    # rvfi component holds the registry shutdown until it has processed that cycle,
+    # so m_rvfi packets still in flight (ZeBu streaming DPI lag) are not dropped.
+    m_eot:
+        domain: 1
+        num: 1
+        fields:
+            cycle:
+                width: 64
+            last_rvfi_cycle:
+                width: 64
+
     m_mtime:
         domain: 1
         num: ${max(TOP.PLATFORM.COSIM.RVFI.NRETS) + 1}
