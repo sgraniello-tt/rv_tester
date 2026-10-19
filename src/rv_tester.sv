@@ -84,7 +84,18 @@ module rv_tester
   end else begin
     for (genvar c = 0; c < NCLKS; c++) begin
 `ifdef CLK_MUX_UNSUPPORTED
-      rv_tester_clkgen #(.CLOCK_FREQ_MHZ(CLOCK_FREQ_MHZ[c]), .FASTEST_FREQ_MHZ(max_clock_freq_overall)) clkgen(.clk(clk[c]), .fastest_clk(fastest_clk));
+ `ifdef TB_CLK_AT_CORE_FREQ
+      // Emulators derive every clock from the fastest one in the design. When the
+      // TB clock runs faster than the core clock, the core clock is synthesized with
+      // a non-uniform edge pattern (e.g. 3000:2500 = 6:5) and becomes unusable for
+      // latency measurement in waves. Run the TB clkgen at the core frequency so the
+      // core clock is the fastest (and therefore uniform). The TB and core clocks
+      // remain separate clkgen instances / separate nets.
+      localparam int CLKGEN_FREQ_MHZ = (c == TB_CLK_IDX) ? CLOCK_FREQ_MHZ[CORE_CLK_IDX] : CLOCK_FREQ_MHZ[c];
+ `else
+      localparam int CLKGEN_FREQ_MHZ = CLOCK_FREQ_MHZ[c];
+ `endif
+      rv_tester_clkgen #(.CLOCK_FREQ_MHZ(CLKGEN_FREQ_MHZ), .FASTEST_FREQ_MHZ(max_clock_freq_overall)) clkgen(.clk(clk[c]), .fastest_clk(fastest_clk));
 
 `else
       if(c == REF_CLK_IDX) begin
