@@ -3639,12 +3639,16 @@ void bridge::process(const rv_tester::terminate_called_mem_checks&) {
 }
 
 void bridge::process(const rv_tester::terminate_called&) {
-  if (!metrics_reported_)
-    report_metrics();
   terminated_ = true;
+  // RVDE-31810: when rvfi drains the m_rvfi stream, it calls report_metrics() itself after the drain.
+  if (metrics_deferred_)
+    return;
+  report_metrics();
 }
 
 void bridge::report_metrics() {
+  if (metrics_reported_)
+    return;
   metrics_reported_ = true;
   if (!cvm::registry::messenger.call<whisperClient<uint64_t>::whisperConnectedRPC>(cvm::topology::get_from_hierarchy("TOP.PLATFORM.WHISPER_CLIENT", 0)))
     return;

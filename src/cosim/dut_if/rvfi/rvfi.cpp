@@ -107,8 +107,12 @@ void rvfi::configure() {
       rv_tester::terminate_called,
       rv_tester::terminate_called_mem_checks>(cvm::topology::get_from_type("PLATFORM", 0));
 
-  if (bridge_)
+  if (bridge_) {
     bridge_->configure();
+    // RVDE-31810: the bridge must not step whisper for EOT metrics while m_rvfi packets are still draining.
+    if (FLAGS_rvfi_drain_timeout_s != 0)
+      bridge_->defer_metrics();
+  }
   if (mcmi_)
     mcmi_->configure();
 }
@@ -146,17 +150,29 @@ void rvfi::process(const rv_tester_transactions::cosim::m_eot<>& m_eot) {
 }
 
 void rvfi::finish_if_drained() {
-  if (terminate_requested_ && !terminated_ && drained()) {
-    cvm::log(cvm::HIGH, "[RVFI] stream drained at cycle {} ({} packets), stopping further rvfi processing\n",
-             last_rvfi_cycle_, rvfi_packets_);
+  // No !terminated_ guard: rvfi terminated by mem_checks/error/disable_checks must still complete the drain.
+  if (terminate_requested_ && drained()) {
+    if (!terminated_)
+      cvm::log(cvm::HIGH, "[RVFI] stream drained at cycle {} ({} packets), stopping further rvfi processing\n",
+               last_rvfi_cycle_, rvfi_packets_);
     terminated_ = true;
+    report_bridge_metrics();
   }
 }
 
+// Deferred from bridge::process(terminate_called); idempotent, so every shutdown path may call it.
+void rvfi::report_bridge_metrics() {
+  if (bridge_)
+    bridge_->report_metrics();
+}
+
 bool rvfi::shutdown_ready() {
-  if (FLAGS_rvfi_drain_timeout_s == 0 || in_reset_ || !FLAGS_rvfi)
+  if (FLAGS_rvfi_drain_timeout_s == 0 || in_reset_ || !FLAGS_rvfi) {
+    report_bridge_metrics();
     return true;
-  if (drained())
+  }
+  // The stream thread reports metrics in finish_if_drained(); terminated_ proves it ran.
+  if (terminated_ && drained())
     return true;
 
   auto now = std::chrono::steady_clock::now();
@@ -172,6 +188,7 @@ bool rvfi::shutdown_ready() {
              "Warning: [RVFI] gave up waiting for m_rvfi stream to drain after {}s (eot_seen={} processed_up_to={} target={} packets={}); "
              "rvfi log / cosim coverage may be truncated\n",
              waited, eot_seen_, last_rvfi_cycle_, eot_last_rvfi_cycle_, rvfi_packets_);
+    report_bridge_metrics();
     return true;
   }
   return false;
@@ -223,9 +240,6 @@ void rvfi::process(const rv_tester_transactions::cosim::m_reset<>& m_reset) {
 
 void rvfi::process(const rv_tester_transactions::cosim::m_rvfi<>& m_rvfi) {
 
-  if (terminated_ || in_reset_)
-    return;
-
   if (loc_ != m_rvfi.location)
     return;
 
@@ -238,8 +252,18 @@ void rvfi::process(const rv_tester_transactions::cosim::m_rvfi<>& m_rvfi) {
     finish_if_drained();
     return;
   }
+
+  if (!terminated_ && !in_reset_) {
+    rvfi_packets_++;
+    process_packet(m_rvfi);
+  }
+
+  // Publish progress only after the bridge consumed the packet: on ZeBu the TB thread polls drained() from shutdown_ready().
   last_rvfi_cycle_ = m_rvfi.cycle;
-  rvfi_packets_++;
+  finish_if_drained();
+}
+
+void rvfi::process_packet(const rv_tester_transactions::cosim::m_rvfi<>& m_rvfi) {
 
   // patch_mode_first_tag_ is captured from the patch trap (the trigger's tag),
   // not from the first ucode record here. See rvfi::process(m_trap) for ecause 60.
