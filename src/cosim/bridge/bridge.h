@@ -90,6 +90,8 @@ public:
 
   void final_phase();
   void report_metrics();
+  // RVDE-31810: the owner (rvfi) will call report_metrics() after the m_rvfi stream has drained.
+  void defer_metrics() { metrics_deferred_ = true; }
   void process(const rv_tester::terminate_called&);
   void process(const rv_tester::terminate_called_mem_checks&);
   void set_patch_mode(int patch) { patch_mode_ = static_cast<patch_mode>(patch); }
@@ -449,7 +451,7 @@ private:
   int unmask_bits_instr, unmask_bits_uop = 0;
   std::vector<std::string> cosim_resynch_csr_defaults;
 
-  bool terminated_ = false, end_mcm_ = false, metrics_reported_ = false;
+  bool terminated_ = false, end_mcm_ = false, metrics_reported_ = false, metrics_deferred_ = false;
   bool check_nmi_at_patch_exit_ = false;
   uint64_t check_nmi_at_patch_cause_ = 0;
   bool check_intr_at_patch_exit_ = false;
