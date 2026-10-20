@@ -168,4 +168,6 @@ private:
   std::chrono::steady_clock::time_point drain_start_{};
   bool drained() const { return eot_seen_ && last_rvfi_cycle_ >= eot_last_rvfi_cycle_; }
   void finish_if_drained();
+  void report_bridge_metrics();
+  void process_packet(const rv_tester_transactions::cosim::m_rvfi<>& m_rvfi);
 };
