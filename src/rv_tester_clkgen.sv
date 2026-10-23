@@ -11,6 +11,11 @@ module rv_tester_clkgen #(
 
   localparam int CLOCK_PERIOD_PS = 1000000 / CLOCK_FREQ_MHZ;
 
+`ifndef PALLADIUM_CAKE1X
+  logic unused_fastest_clk_ok;
+  assign unused_fastest_clk_ok = fastest_clk;
+`endif
+
 `ifdef IXCOM_COMPILE
  `ifdef PALLADIUM_CAKE1X
   IXCcake1x #(.FREQ(CLOCK_FREQ_MHZ),.BFREQ(FASTEST_FREQ_MHZ)) uclk (.clkBase(fastest_clk),.clkOut(clk));

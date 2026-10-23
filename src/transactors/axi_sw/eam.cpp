@@ -10,6 +10,7 @@
 DEFINE_int32(eam_decline_excl_pct, 0, "Percentage of exclusive reads (ARLOCK) the EAM declines: no reservation is taken and OKAY is returned instead of EXOKAY");
 DEFINE_string(eam_pass_invalidate_ratio, "1:0", "Exclusive write (AWLOCK) pass/fail pattern in format 'n:e': n exclusive writes succeed, then e are failed (reservation invalidated), repeating");
 DEFINE_string(eam_unsupported_addr, "", "Comma separated list of inclusive address ranges ('first-last', hex or decimal) that the EAM treats as unsupported targets for exclusive accesses; an exclusive transaction to any of them is flagged as an error");
+DEFINE_bool(eam_disable_excl_mon, false, "Disable the EAM exclusive monitor: no reservation is taken on an exclusive read (ARLOCK) and an exclusive write (AWLOCK) is never squashed; both complete as plain accesses with their default response (use when exclusives are resolved upstream, e.g. by the MMCAB in-bridge monitor)");
 DEFINE_uint64(eam_reservation_ttl, 0, "Reservation time-to-live in TB clock cycles: an exclusive write (AWLOCK) is failed and its reservation invalidated if at least this many cycles elapsed since the exclusive read that took it. 0 disables the check");
 
 eam& eam::instance() {
@@ -43,9 +44,9 @@ eam::eam() {
 
   parse_unsupported_addr();
 
-  cvm::log(cvm::HIGH, "[eam] config: decline_excl_pct={}, pass_invalidate_ratio={}:{}, reservation_ttl={}, unsupported_addr='{}'\n",
-           FLAGS_eam_decline_excl_pct, pattern_pass_, pattern_fail_, FLAGS_eam_reservation_ttl,
-           FLAGS_eam_unsupported_addr);
+  cvm::log(cvm::HIGH, "[eam] config: disable_excl_mon={}, decline_excl_pct={}, pass_invalidate_ratio={}:{}, reservation_ttl={}, unsupported_addr='{}'\n",
+           FLAGS_eam_disable_excl_mon, FLAGS_eam_decline_excl_pct, pattern_pass_, pattern_fail_,
+           FLAGS_eam_reservation_ttl, FLAGS_eam_unsupported_addr);
 }
 
 // +eam_unsupported_addr = "first-last[,first-last]*", bounds inclusive and
@@ -261,6 +262,10 @@ void eam::invalidate_overlaps(const axi::a_t& a) {
 
 eam_verdict eam::on_addr(const axi::a_t& a) {
   eam_verdict v;
+
+  // +eam_disable_excl_mon: monitor off; nothing is reserved or invalidated, and the access keeps its default non-exclusive response.
+  if (FLAGS_eam_disable_excl_mon)
+    return v;
 
   // Reservation owner index: AxUSER[3:0].
   const uint32_t hart = hart_of(a);

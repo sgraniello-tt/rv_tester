@@ -192,6 +192,7 @@ void whisperClient<URV>::configure() {
   cvm::registry::messenger.procedure<whisperClearNmiCauseRPC>(loc_, [this](int hart, uint64_t time, uint64_t cause) { return this->whisperClearNmiCause(hart, time, cause); });
   cvm::registry::messenger.procedure<whisperSnapshotSaveRPC>(loc_, [this]() { return this->whisperSnapshotSave(); });
   cvm::registry::messenger.procedure<whisperSetAmoAllowRPC>(loc_, [this](int hart, bool allowNonCacheable, bool allowIo, bool& valid) { return this->whisperSetAmoAllow(hart, allowNonCacheable, allowIo, valid); });
+  cvm::registry::messenger.procedure<whisperSetRsrvAllowRPC>(loc_, [this](int hart, bool allowNonCacheable, bool allowIo, bool& valid) { return this->whisperSetRsrvAllow(hart, allowNonCacheable, allowIo, valid); });
   cvm::registry::messenger.procedure<whisperSetClearTinstLrScRPC>(loc_, [this](int hart, bool enable, bool& valid) { return this->whisperSetClearTinstLrSc(hart, enable, valid); });
   cvm::registry::messenger.procedure<whisperEnablePmaMasksRPC>(loc_, [this](int hart, bool enable, bool& valid) { return this->whisperEnablePmaMasks(hart, enable, valid); });
   cvm::registry::messenger.procedure<whisperMcmSkipReadDataCheckRPC>(loc_, [this](uint64_t addr, unsigned size, bool enable) { return this->whisperMcmSkipReadDataCheck(addr, size, enable); });
@@ -1337,6 +1338,15 @@ bool whisperClient<URV>::whisperSetAmoAllow(int hart, bool allowNonCacheable, bo
   bool validNc = false, validIo = false;
   bool ok = whisperPoke(hart, 0, 's', WhisperSpecialResource::AmoInNc, allowNonCacheable, false, false, validNc) &&
             whisperPoke(hart, 0, 's', WhisperSpecialResource::AmoInIo, allowIo, false, false, validIo);
+  valid = validNc and validIo;
+  return ok;
+}
+
+template <typename URV>
+bool whisperClient<URV>::whisperSetRsrvAllow(int hart, bool allowNonCacheable, bool allowIo, bool& valid) {
+  bool validNc = false, validIo = false;
+  bool ok = whisperPoke(hart, 0, 's', WhisperSpecialResource::RsrvInNc, allowNonCacheable, false, false, validNc) &&
+            whisperPoke(hart, 0, 's', WhisperSpecialResource::RsrvInIo, allowIo, false, false, validIo);
   valid = validNc and validIo;
   return ok;
 }
