@@ -48,7 +48,7 @@ bool get_csr_name_instr(const std::string& input, std::string& modified_string);
 REGISTRY_register(rvfi, COSIM, cvm::registry::all);
 
 rvfi::rvfi(cvm::topology::loc_t loc, unsigned id)
-    : log("h" + std::to_string(id) + "_dut_rvfi.log"), loc_(loc), id_(id) {
+    : log_("h" + std::to_string(id) + "_dut_rvfi.log"), log_enabled_(FLAGS_rvfi_log), loc_(loc), id_(id) {
   whisper::initialize();
 
   std::stringstream ss(FLAGS_rvfi_custom_uop_opcodes);
@@ -121,8 +121,9 @@ rvfi::~rvfi() {
   uint32_t ncores = cvm::topology::attr(cvm::topology::get_from_type("PLATFORM", 0), "NHARTS").second;
   if (FLAGS_rvfi && ncores == 1 && (count_ == 1) && (FLAGS_offline_dpi == false))
     cvm::log(cvm::ERROR, "Error: rvfi termination without processing any instructions\n");
-  if (FLAGS_rvfi_log)
-    log.flush();
+  // Do not consult FLAGS_rvfi_log here: see log_enabled_ in rvfi.h (FlagSaver resets it at exit).
+  if (log_enabled_ && log_written_)
+    log_.flush();
 }
 
 void rvfi::check() {

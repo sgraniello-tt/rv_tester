@@ -89,7 +89,19 @@ private:
   std::string mem_attr_to_string(uint32_t mem_attr);
   std::bitset<256> stringToBitset(const std::string& hexString);
   std::bitset<256> extract_bits_as_bitset(const std::bitset<256>& bitset, size_t msb, size_t lsb);
-  cvm::file_logger log;
+  // h<id>_dut_rvfi.log. cvm::file_logger opens the file lazily on the first write and
+  // its flush() dereferences the stream unconditionally, so only flush after a write.
+  // log_enabled_ is captured at construction: gflags' FlagSaver (cvm plusargs) restores
+  // FLAGS_rvfi_log to its default (true) during static destruction, before ~rvfi()
+  // runs in the zdpiReport offline replay, which never shuts the registry down.
+  cvm::file_logger log_;
+  bool log_enabled_ = false;
+  bool log_written_ = false;
+  template <typename... Args>
+  void log(cvm::verbosity_level v, Args&&... args) {
+    log_written_ = true;
+    log_(v, std::forward<Args>(args)...);
+  }
   cvm::topology::loc_t loc_;
   unsigned id_;
 
