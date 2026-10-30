@@ -4,6 +4,7 @@
 // vim: ft=c et ts=2 sw=0 sts
 
 #include "bridge.h"
+#include "perf_prof.h"
 #include "cosim/utils/util.h"
 #include "device_address_map/device_address_map.h"
 #include "cvm/plusargs.hpp"
@@ -562,6 +563,7 @@ void bridge::skip_mcm_read_data_check_for_fault(uint64_t tag, uint64_t addr, uns
 
 // DUT interface callback: Instruction Retire
 void bridge::process_dut_instr_retire(hart_id_t hart, rv_instr_t& d) {
+  prof6555::scope _p(prof6555::RETIRE); prof6555::periodic();
 
   print(cvm::HIGH, "process_dut_instr_retire:: hart={}, d.cycle={}, d.pc={:#x}, d.tag={}, d.excp={}, d.ecause={}, d.opcode={:#x}, d.disasm={}\n", hart, d.cycle, d.pc.pc_rdata, d.tag, d.excp, d.ecause, d.opcode, d.disasm);
   print(cvm::HIGH, "                        :: mip_={}, deferred_intr_={} patch_mode_={} trap={}\n", mip_.to_ullong(), deferred_intr_, patch_mode_, d.trap);
@@ -784,6 +786,7 @@ void bridge::resynch_whisper_on_patch(hart_id_t hart, rv_instr_t& d, const std::
 }
 
 void bridge::compare_dut_whisper_state(hart_id_t hart, const whisper_state_t& w, rv_instr_t& d) {
+  prof6555::scope _p(prof6555::COMPARE);
 
   const auto cac_status_verbosity = cvm::HIGH;
   cac_.Step(hart, cvm::logger::check_verbosity(cac_status_verbosity));
@@ -1709,6 +1712,7 @@ bool bridge::is_indirect_reg(const std::string& instr) {
 }
 
 void bridge::step(hart_id_t hart, whisper_state_t& w) {
+  prof6555::scope _p(prof6555::WHISPER_STEP);
   bool valid;
 
   try {
@@ -2193,6 +2197,7 @@ std::string bridge::vtype_str(uint64_t vtype_val) {
 }
 
 bool bridge::resynch_needed(const hart_id_t& hart, const rv_instr_t& d, const std::string& instr, const whisper_state_t& w, std::string& resource, std::string& dut, std::string& iss) {
+  prof6555::scope _p(prof6555::RESYNCH_NEEDED);
   uint32_t cluster_id = 0;
 
   if (d.mem_read.valid && resynch_on_pa(d.mem_read.pa, d.cycle)) {
@@ -2465,6 +2470,7 @@ bool bridge::sc_slice_status(const uint64_t& pa) {
 
 // Poke resources in whisper
 void bridge::resynch(hart_id_t hart, const rv_instr_t& d) {
+  prof6555::scope _p(prof6555::RESYNCH);
   bool valid = false;
 
   if (d.pc.pc_rdata != w_.pc.pc_rdata) {
