@@ -1,4 +1,4 @@
-exports_files(["bridge.cpp", "bridge.h", "bridge_base.h", "bridge_if.h", "bridge_params.h"])
+exports_files(["bridge.cpp", "bridge.h", "bridge_base.h", "bridge_if.h", "bridge_params.h", "perf_prof.h"])
 
 cc_library(
         name    = "bridge_plusargs",
