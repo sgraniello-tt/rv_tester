@@ -70,6 +70,7 @@ module rv_tester
   logic [NUM_CLK_MODES-1:0] mode_clk [NCLKS-1:0];
   int clk_profile = 0;
   int freq_switch_ncycles = 0;
+  LU freq_switch_cnt = 0; // clocks % freq_switch_ncycles without a divider
   bit dyn_clk_switch = '0;
   bit rv_tester_reset_d1 = '0;
 
@@ -94,7 +95,7 @@ module rv_tester
     clock_mode_next = clock_mode;
     if (rv_tester_reset || rv_tester_reset_d1 || !dyn_clk_switch) begin
       clock_mode_next = CLK_MODE_W'(clk_profile);
-    end else if (freq_switch_ncycles != 0 && (clocks % longint'(freq_switch_ncycles)) == 0) begin
+    end else if (freq_switch_ncycles != 0 && freq_switch_cnt == 0) begin
       clock_mode_next = (clock_mode == CLK_MODE_W'(NUM_CLK_PROFILES)) ? CLK_MODE_W'(1) : clock_mode + 1'b1;
     end
   end
@@ -251,6 +252,7 @@ module rv_tester
 
     rv_tester_reset <= rerun_now;
     clocks          <= clocks + 1;
+    freq_switch_cnt <= (freq_switch_ncycles != 0 && freq_switch_cnt + 1 >= LU'(freq_switch_ncycles)) ? '0 : freq_switch_cnt + 1;
 
 `ifndef NO_TIMESTAMP
     current_time <= $time;
@@ -271,6 +273,7 @@ module rv_tester
       instructions    <= '0;
       if (num_resets < 0) begin
         clocks <= '0;
+        freq_switch_cnt <= '0;
       end
     end
   end
